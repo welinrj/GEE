@@ -1,0 +1,245 @@
+// Define the region of interest: Vanuatu
+var vanuatu = ee.FeatureCollection("FAO/GAUL/2015/level1")
+  .filter(ee.Filter.eq('ADM0_NAME', 'Vanuatu'));
+
+// Define the time range: past 10 years
+var startDate = ee.Date('2013-07-01');
+var endDate = ee.Date('2023-07-01');
+
+// Load the Landsat 8 Collection 2, Level-2 image collection
+var landsat8 = ee.ImageCollection('LANDSAT/LC08/C02/T1_L2')
+  .filterBounds(vanuatu)
+  .filterDate(startDate, endDate);
+
+// Function to add NDVI band
+var addNDVI = function(image) {
+  var ndvi = image.normalizedDifference(['SR_B5', 'SR_B4']).rename('NDVI');
+  return image.addBands(ndvi);
+};
+
+// Calculate NDVI for the Landsat images for each year
+var yearlyNDVI = ee.ImageCollection(
+  ee.List.sequence(2013, 2023).map(function(year) {
+    var start = ee.Date.fromYMD(year, 1, 1);
+    var end = start.advance(1, 'year');
+    var composite = landsat8.filterDate(start, end).map(addNDVI).mean();
+    return composite.set('year', year).select('NDVI');
+  })
+);
+
+// Calculate the change in NDVI over the 10-year period
+var ndvi2013 = yearlyNDVI.filter(ee.Filter.eq('year', 2013)).first();
+var ndvi2023 = yearlyNDVI.filter(ee.Filter.eq('year', 2023)).first();
+var ndviChange = ndvi2023.subtract(ndvi2013).rename('NDVI_Change');
+
+// Threshold for significant degradation (NDVI decline)
+var degradationThreshold = -0.2; // Adjust this value as needed
+var degradedAreas = ndviChange.lte(degradationThreshold);
+
+// Clip NDVI Change and Degraded Areas to Vanuatu
+var ndviChangeClipped = ndviChange.clip(vanuatu);
+var degradedAreasClipped = degradedAreas.clip(vanuatu);
+
+// Define visualization parameters for NDVI change
+var ndviChangeVis = {
+  min: -0.5,
+  max: 0.5,
+  palette: ['red', 'orange', 'yellow', 'green', 'darkgreen']
+};
+
+// Display the results
+Map.centerObject(vanuatu, 7);
+Map.addLayer(vanuatu, {}, 'Vanuatu');
+Map.addLayer(ndviChangeClipped, ndviChangeVis, 'NDVI Change (2013-2023)');
+
+// Mask degraded areas to show only where degradation occurred
+Map.addLayer(degradedAreasClipped.updateMask(degradedAreasClipped), {palette: 'red'}, 'Degraded Areas');
+
+// Define legend for NDVI change
+var legendNDVIChange = ui.Panel({
+  style: {
+    position: 'top-left',
+    padding: '8px 15px'
+  }
+});
+
+var legendTitleNDVIChange = ui.Label({
+  value: 'NDVI Change Legend',
+  style: {
+    fontWeight: 'bold',
+    fontSize: '16px',
+    margin: '0 0 4px 0',
+    padding: '0'
+  }
+});
+legendNDVIChange.add(legendTitleNDVIChange);
+
+// Add color legend for NDVI change
+var makeRowNDVIChange = function(color, label) {
+  var colorBox = ui.Label({
+    style: {
+      backgroundColor: color,
+      padding: '8px',
+      margin: '0 0 4px 0'
+    }
+  });
+  var description = ui.Label({
+    value: label,
+    style: {margin: '0 0 4px 6px'}
+  });
+  return ui.Panel({
+    widgets: [colorBox, description],
+    layout: ui.Panel.Layout.Flow('horizontal')
+  });
+};
+
+// NDVI change categories and corresponding colors
+var paletteLabelsNDVIChange = [
+  {color: 'darkgreen', label: '>= 0.4 (Significant Increase)'},
+  {color: 'green', label: '0.2 - 0.4 (Moderate Increase)'},
+  {color: 'yellow', label: '-0.2 - 0.2 (No Change)'},
+  {color: 'orange', label: '-0.2 - -0.4 (Moderate Decrease)'},
+  {color: 'red', label: '<= -0.4 (Significant Decrease)'}
+];
+
+// Add the legend for NDVI change to the map
+paletteLabelsNDVIChange.forEach(function(item) {
+  legendNDVIChange.add(makeRowNDVIChange(item.color, item.label));
+});
+
+Map.add(legendNDVIChange);
+
+// Define legend for degraded areas
+var legendDegradedAreas = ui.Panel({
+  style: {
+    position: 'top-left',
+    padding: '8px 15px'
+  }
+});
+
+var legendTitleDegradedAreas = ui.Label({
+  value: 'Degraded Areas Legend',
+  style: {
+    fontWeight: 'bold',
+    fontSize: '16px',
+    margin: '0 0 4px 0',
+    padding: '0'
+  }
+});
+legendDegradedAreas.add(legendTitleDegradedAreas);
+
+// Add color legend for degraded areas
+var makeRowDegradedAreas = function(color, name) {
+  var colorBox = ui.Label({
+    style: {
+      backgroundColor: color,
+      padding: '8px',
+      margin: '0 0 4px 0'
+    }
+  });
+  var description = ui.Label({
+    value: name,
+    style: {margin: '0 0 4px 6px'}
+  });
+  return ui.Panel({
+    widgets: [colorBox, description],
+    layout: ui.Panel.Layout.Flow('horizontal')
+  });
+};
+
+legendDegradedAreas.add(makeRowDegradedAreas('red', 'Degraded Areas'));
+
+Map.add(legendDegradedAreas);
+
+// Create scalebar
+var createScalebar = function() {
+  var scalebar = ui.Panel({
+    style: {
+      position: 'bottom-right',
+      padding: '8px 15px'
+    }
+  });
+
+  var scalebarTitle = ui.Label({
+    value: 'Scalebar',
+    style: {
+      fontWeight: 'bold',
+      fontSize: '16px',
+      margin: '0 0 4px 0',
+      padding: '0'
+    }
+  });
+
+  scalebar.add(scalebarTitle);
+
+  var scalebarBox = ui.Label({
+    value: 'Scale: 1:1000000',
+    style: {
+      padding: '8px',
+      margin: '0 0 4px 0'
+    }
+  });
+
+  scalebar.add(scalebarBox);
+  Map.add(scalebar);
+};
+
+createScalebar();
+
+// Create screen title
+var createScreenTitle = function() {
+  var screenTitle = ui.Label({
+    value: 'Land Degradation Analysis (2013-2023) for Vanuatu',
+    style: {
+      position: 'top-center',
+      fontWeight: 'bold',
+      fontSize: '24px',
+      margin: '10px',
+      padding: '10px',
+      backgroundColor: 'rgba(255, 255, 255, 0.7)'
+    }
+  });
+  Map.add(screenTitle);
+};
+
+createScreenTitle();
+
+// Add map creator
+var addMapCreator = function() {
+  var creatorLabel = ui.Label({
+    value: 'Map by: Micky Welin, VCAP-2 GIS Analyst',
+    style: {
+      position: 'bottom-center',
+      fontSize: '14px',
+      margin: '10px',
+      padding: '10px',
+      backgroundColor: 'rgba(255, 255, 255, 0.7)'
+    }
+  });
+  Map.add(creatorLabel);
+};
+
+addMapCreator();
+
+// Print the area of degraded regions to the screen
+var pixelArea = ee.Image.pixelArea().divide(10000); // Convert m^2 to hectares
+var degradedAreaHectares = degradedAreasClipped.multiply(pixelArea).reduceRegion({
+  reducer: ee.Reducer.sum(),
+  geometry: vanuatu.geometry(),
+  scale: 30,
+  maxPixels: 1e13
+});
+
+degradedAreaHectares.evaluate(function(result) {
+  var degradedAreaLabel = ui.Label({
+    value: 'Degraded Area in Hectares: ' + result.NDVI_Change.toFixed(2),
+    style: {
+      position: 'bottom-center',
+      fontSize: '16px',
+      margin: '10px',
+      padding: '10px',
+      backgroundColor: 'rgba(255, 255, 255, 0.7)'
+    }
+  });
+  Map.add(degradedAreaLabel);
+});
